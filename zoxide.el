@@ -320,7 +320,7 @@ The `cd' is sent to the most recently active eat buffer."
                        (bound-and-true-p eat-terminal)
                        (fboundp 'eat--send-string))
                   (when-let ((proc (eat-term-parameter eat-terminal 'eat--process)))
-                    (eat--send-string proc (format "cd %s\nclear\n" candidate))
+                    (eat--send-string proc (format "cd %s && clear\n" candidate))
                     (message "Eat-zoxide: cd to %s" candidate))
                 (user-error "Not in an eat terminal buffer"))))
           candidate)
@@ -332,7 +332,7 @@ The `cd' is sent to the most recently active eat buffer."
                      (bound-and-true-p eat-terminal)
                      (fboundp 'eat--send-string))
                 (when-let ((proc (eat-term-parameter eat-terminal 'eat--process)))
-                  (eat--send-string proc (format "cd %s\nclear\n" path)))
+                  (eat--send-string proc (format "cd %s && clear\n" path)))
               (user-error "Not in an eat terminal buffer"))))))))
 
 ;;;###autoload
