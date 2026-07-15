@@ -99,6 +99,18 @@ Has no effect when `zoxide-show-scores' is nil."
   :type 'integer
   :group 'zoxide)
 
+(defcustom zoxide-add-amount 5
+  "Amount added to a directory's score on embark `+'.
+Passed as `--score' to `zoxide add'."
+  :type 'integer
+  :group 'zoxide)
+
+(defcustom zoxide-subtract-amount 5
+  "Fixed amount subtracted from a directory's score on embark `-'.
+The directory is removed and re-added at `max(1, current - this)'."
+  :type 'integer
+  :group 'zoxide)
+
 (defface zoxide-score-face
   '((t (:inherit font-lock-comment-face)))
   "Face for the frecency score in zoxide results."
@@ -264,6 +276,14 @@ Skips `consult--async-split' which inserts a narrowing character."
    (consult--async-indicator)
    (consult--async-refresh)))
 
+;; Direct keybindings for the zoxide consult minibuffer.
+;; C-i and C-d take priority over `vertico-map' so they don't conflict
+;; with other vertico bindings (e.g. C-d in consult-buffer kills buffers).
+(defvar-keymap zoxide-consult-map
+  :doc "Additional keybindings for the zoxide travel minibuffer."
+  "C-i" #'embark-zoxide-add
+  "C-d" #'embark-zoxide-subtract)
+
 ;;;###autoload
 (defun grease-zoxide-travel ()
   "Open a path from zoxide, ranked by frecency with consult.
@@ -277,6 +297,7 @@ Opens the selected directory in Grease via `zoxide-travel-callback-function'."
                 (consult--process-collection #'zoxide-consult-builder
                   :transform (consult--async-map #'zoxide-consult-format))
                 :async-wrap #'zoxide--async-wrap
+                :keymap zoxide-consult-map
                 :prompt "zoxide: "
                 :category 'zoxide-path
                 :require-match t
@@ -305,6 +326,7 @@ The `cd' is sent to the most recently active eat buffer."
                   (consult--process-collection #'zoxide-consult-builder
                     :transform (consult--async-map #'zoxide-consult-format))
                   :async-wrap #'zoxide--async-wrap
+                  :keymap zoxide-consult-map
                   :prompt "zoxide: "
                   :category 'zoxide-path
                   :require-match t
