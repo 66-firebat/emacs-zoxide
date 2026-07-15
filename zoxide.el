@@ -272,25 +272,22 @@ The callback is controlled by `zoxide-travel-callback-function'."
   (interactive)
   (if (and (fboundp 'consult--process-collection)
            (require 'consult nil t))
-      (let ((candidate
-             (consult--read
-              (consult--process-collection #'zoxide-consult-builder
-                :transform (consult--async-map #'zoxide-consult-format))
-              :async-wrap #'zoxide--async-wrap
-              :prompt "zoxide: "
-              :category 'zoxide-path
-              :require-match t
-              :sort nil
-              :lookup (lambda (selected &rest _)
-                        ;; Extract path from display string — text properties
-                        ;; may not survive through the completion pipeline.
-                        (when selected
-                          (or (cdr (zoxide-parse-score-line selected))
-                              selected)))
-              :state (when (fboundp 'consult--file-preview)
-                       (consult--file-preview)))))
+      (let* ((candidate
+               (consult--read
+                (consult--process-collection #'zoxide-consult-builder
+                  :transform (consult--async-map #'zoxide-consult-format))
+                :async-wrap #'zoxide--async-wrap
+                :prompt "zoxide: "
+                :category 'zoxide-path
+                :require-match t
+                :sort nil
+                :lookup (lambda (selected &rest _)
+                          (when selected
+                            (or (cdr (zoxide-parse-score-line selected))
+                                selected))))))
         (when candidate
-          (funcall zoxide-travel-callback-function candidate)))
+          (funcall zoxide-travel-callback-function candidate))
+        candidate)
     ;; Fallback to old completing-read
     (zoxide-open-with nil zoxide-travel-callback-function t)))
 
