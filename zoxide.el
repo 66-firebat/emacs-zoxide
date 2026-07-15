@@ -265,10 +265,10 @@ Skips `consult--async-split' which inserts a narrowing character."
    (consult--async-refresh)))
 
 ;;;###autoload
-(defun zoxide-travel ()
+(defun grease-zoxide-travel ()
   "Open a path from zoxide, ranked by frecency with consult.
 Shows the frecency score to the left of each path.
-The callback is controlled by `zoxide-travel-callback-function'."
+Opens the selected directory in Grease via `zoxide-travel-callback-function'."
   (interactive)
   (if (and (fboundp 'consult--process-collection)
            (require 'consult nil t))
@@ -290,6 +290,50 @@ The callback is controlled by `zoxide-travel-callback-function'."
         candidate)
     ;; Fallback to old completing-read
     (zoxide-open-with nil zoxide-travel-callback-function t)))
+
+;;;###autoload
+(defun eat-zoxide-travel ()
+  "Select a zoxide directory and cd to it in the current eat terminal.
+Uses consult for selection with frecency ranking.
+The `cd' is sent to the most recently active eat buffer."
+  (interactive)
+  (let ((origin-buffer (current-buffer)))
+    (if (and (fboundp 'consult--process-collection)
+             (require 'consult nil t))
+        (let* ((candidate
+                 (consult--read
+                  (consult--process-collection #'zoxide-consult-builder
+                    :transform (consult--async-map #'zoxide-consult-format))
+                  :async-wrap #'zoxide--async-wrap
+                  :prompt "zoxide: "
+                  :category 'zoxide-path
+                  :require-match t
+                  :sort nil
+                  :lookup (lambda (selected &rest _)
+                            (when selected
+                              (or (cdr (zoxide-parse-score-line selected))
+                                  selected))))))
+          (when (and candidate
+                     (buffer-live-p origin-buffer))
+            (with-current-buffer origin-buffer
+              (if (and (eq major-mode 'eat-mode)
+                       (bound-and-true-p eat-terminal)
+                       (fboundp 'eat--send-string))
+                  (when-let ((proc (eat-term-parameter eat-terminal 'eat--process)))
+                    (eat--send-string proc (format "cd %s\n" candidate))
+                    (message "Eat-zoxide: cd to %s" candidate))
+                (user-error "Not in an eat terminal buffer"))))
+          candidate)
+      ;; Fallback to old completing-read
+      (let ((path (completing-read "path: " (zoxide-query) nil t)))
+        (when (and path (buffer-live-p origin-buffer))
+          (with-current-buffer origin-buffer
+            (if (and (eq major-mode 'eat-mode)
+                     (bound-and-true-p eat-terminal)
+                     (fboundp 'eat--send-string))
+                (when-let ((proc (eat-term-parameter eat-terminal 'eat--process)))
+                  (eat--send-string proc (format "cd %s\n" path)))
+              (user-error "Not in an eat terminal buffer"))))))))
 
 ;;;###autoload
 (defun zoxide-travel-with-query ()
