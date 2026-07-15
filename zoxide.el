@@ -77,6 +77,33 @@ The default defination is get from `default-directory' for add and remove and."
   :type 'function
   :group 'zoxide)
 
+;; ── Score & display configuration ──────────────────────────────────────────
+
+(defcustom zoxide-show-scores t
+  "When non-nil, display the frecency score to the left of each path.
+When nil, only the path is shown (scores are still used for ranking
+behind the scenes)."
+  :type 'boolean
+  :group 'zoxide)
+
+(defcustom zoxide-score-width 6
+  "Width of the score field when displaying zoxide results.
+The score is right-justified within this width.
+Has no effect when `zoxide-show-scores' is nil."
+  :type 'integer
+  :group 'zoxide)
+
+(defcustom zoxide-score-path-padding 4
+  "Spaces between the score and the path in zoxide results.
+Has no effect when `zoxide-show-scores' is nil."
+  :type 'integer
+  :group 'zoxide)
+
+(defface zoxide-score-face
+  '((t (:inherit font-lock-comment-face)))
+  "Face for the frecency score in zoxide results."
+  :group 'zoxide)
+
 ;;;###autoload
 (defun zoxide-run (async &rest args)
   "Run zoxide command with args.
@@ -182,11 +209,90 @@ This is a help function to define interactive commands like
   (interactive)
   (zoxide-open-with nil #'cd t))
 
+;; ── Score parsing & display helpers ────────────────────────────────────────
+
+(defun zoxide-parse-score-line (line)
+  "Parse a single LINE from `zoxide query -ls' into (SCORE . PATH).
+LINE format is \"<score> <path>\" where score may be right-justified
+with leading whitespace.  Returns nil if LINE doesn't match."
+  (let ((trimmed (string-trim line)))
+    (when (string-match (rx (group (+ (or digit ?.)))    ;; score number
+                            " "                         ;; separator
+                            (group (+ any)))             ;; path
+                        trimmed)
+      (cons (string-to-number (match-string 1 trimmed))
+            (string-trim (match-string 2 trimmed))))))
+
+(defun zoxide-format-entry (score path &optional score-width padding)
+  "Format a zoxide entry with SCORE right-justified before PATH.
+When `zoxide-show-scores' is nil, only the path is returned.
+SCORE-WIDTH controls the score field width (default `zoxide-score-width').
+PADDING is the number of spaces between score and path."
+  (if (not zoxide-show-scores)
+      path
+    (let* ((sw (or score-width zoxide-score-width))
+           (pad (or padding zoxide-score-path-padding))
+           (score-str (format (format "%%%d.1f" sw) score)))
+      (concat
+       (propertize score-str 'face 'zoxide-score-face)
+       (make-string pad ?\s)
+       path))))
+
+(defun zoxide-consult-format (line)
+  "Format a raw LINE from `zoxide query -ls' for display.
+Returns a propertized string with `zoxide-score' and `zoxide-path'
+text properties, or nil if LINE can't be parsed."
+  (pcase (zoxide-parse-score-line line)
+    (`(,score . ,path)
+     (propertize (zoxide-format-entry score path)
+                 'zoxide-score score
+                 'zoxide-path path))
+    (_ nil)))
+
+(defun zoxide-consult-builder (input)
+  "Build command line for `zoxide query -ls' from INPUT.
+Returns a command list or nil."
+  (if (or (not input) (string-empty-p input))
+      '("zoxide" "query" "-ls")
+    (list "zoxide" "query" "-ls" input)))
+
+(defun zoxide--async-wrap (async)
+  "Wrap ASYNC function for zoxide without the split/`#' prefix.
+Skips `consult--async-split' which inserts a narrowing character."
+  (consult--async-pipeline
+   async
+   (consult--async-indicator)
+   (consult--async-refresh)))
+
 ;;;###autoload
 (defun zoxide-travel ()
-  "Like `zoxide-find-file', this function is used to open the path directly."
+  "Open a path from zoxide, ranked by frecency with consult.
+Shows the frecency score to the left of each path.
+The callback is controlled by `zoxide-travel-callback-function'."
   (interactive)
-  (zoxide-open-with nil zoxide-travel-callback-function t))
+  (if (and (fboundp 'consult--process-collection)
+           (require 'consult nil t))
+      (let ((candidate
+             (consult--read
+              (consult--process-collection #'zoxide-consult-builder
+                :transform (consult--async-map #'zoxide-consult-format))
+              :async-wrap #'zoxide--async-wrap
+              :prompt "zoxide: "
+              :category 'zoxide-path
+              :require-match t
+              :sort nil
+              :lookup (lambda (selected &rest _)
+                        ;; Extract path from display string — text properties
+                        ;; may not survive through the completion pipeline.
+                        (when selected
+                          (or (cdr (zoxide-parse-score-line selected))
+                              selected)))
+              :state (when (fboundp 'consult--file-preview)
+                       (consult--file-preview)))))
+        (when candidate
+          (funcall zoxide-travel-callback-function candidate)))
+    ;; Fallback to old completing-read
+    (zoxide-open-with nil zoxide-travel-callback-function t)))
 
 ;;;###autoload
 (defun zoxide-travel-with-query ()
