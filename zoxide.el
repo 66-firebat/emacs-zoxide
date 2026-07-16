@@ -293,18 +293,18 @@ Opens the selected directory in Grease via `zoxide-travel-callback-function'."
            (require 'consult nil t))
       (let* ((candidate
                (consult--read
-                (consult--process-collection #'zoxide-consult-builder
-                  :transform (consult--async-map #'zoxide-consult-format))
-                :async-wrap #'zoxide--async-wrap
-                :keymap zoxide-consult-map
-                :prompt "󰡦 : "
-                :category 'zoxide-path
-                :require-match t
-                :sort nil
-                :lookup (lambda (selected &rest _)
-                          (when selected
-                            (or (cdr (zoxide-parse-score-line selected))
-                                selected))))))
+                  (consult--process-collection #'zoxide-consult-builder
+                    :transform (consult--async-map #'zoxide-consult-format))
+                  :async-wrap #'zoxide--async-wrap
+                  :keymap zoxide-consult-map
+                  :prompt "󰡦 : "
+                  :category 'zoxide-path
+                  :require-match t
+                  :sort nil
+                  :lookup (lambda (selected &rest _)
+                            (when selected
+                              (or (cdr (zoxide-parse-score-line selected))
+                                  selected))))))
         (when candidate
           (funcall zoxide-travel-callback-function candidate))
         candidate)
