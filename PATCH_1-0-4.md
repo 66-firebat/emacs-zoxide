@@ -2,14 +2,14 @@
 
 ## Goal
 
-Add embark keybindings `+` and `-` inside the zoxide consult minibuffer to manipulate directory scores on the fly:
+Add direct keybindings `C-i` and `C-d` inside the zoxide consult minibuffer to manipulate directory scores on the fly:
 
 | Key | Action | Effect |
 |-----|--------|--------|
-| `+` | `zoxide add <path>` | Boost the directory's frecency score by 1 |
-| `-` | Remove and re-add with reduced score | Demote the directory by a fixed amount |
+| `C-i` | `zoxide add --score <N> <path>` | Increment by `zoxide-add-amount` (default 5) |
+| `C-d` | Remove + re-add at reduced score | Decrement by `zoxide-subtract-amount` (default 5) |
 
-After each action, the candidate list refreshes live in the minibuffer so you see the updated rankings immediately.
+After each action, the candidate list refreshes in-place by re-querying zoxide and swapping `vertico--candidates` directly — no timer, no `abort-recursive-edit`, no `embark--restart`.
 
 ---
 
@@ -17,71 +17,109 @@ After each action, the candidate list refreshes live in the minibuffer so you se
 
 - Each directory gets a **frecency score** starting at 1
 - Every `cd` into it (or `zoxide add`) **increments by 1**
-- The `--score <N>` flag on `zoxide add` sets the **increment amount** (default 1)
+- `zoxide add --score <N>` adds `N` to the existing score (NOT setting it absolutely)
+- `zoxide remove` deletes the entry entirely
 - The **aging algorithm**: when total scores exceed `_ZO_MAXAGE` (default 10,000), all scores are divided so total ≈ 90% of max. Entries below 1 after aging are pruned.
-- **No native decrement** exists in zoxide 0.9.9 (`-i`/`-d` flags from PR #422 are not available in this release)
+- **No native decrement** exists in zoxide 0.9.9
 
-## Proposed implementation
+## Implementation
 
-### 1. New defcustoms
+### 1. Defcustoms (in `zoxide.el`)
 
 ```elisp
 (defcustom zoxide-add-amount 5
-  "Amount added to a directory's score on embark `+'.
-Passed as `--score' to `zoxide add'."
+  "Amount added to a directory's score on C-i."
   :type 'integer
   :group 'zoxide)
 
 (defcustom zoxide-subtract-amount 5
-  "Fixed amount subtracted from a directory's score on embark `-'.
+  "Amount subtracted from a directory's score on C-d.
 The directory is removed and re-added at `max(1, current - this)'."
   :type 'integer
   :group 'zoxide)
 ```
 
-### 2. Embark action functions
+### 2. Action functions (in `embark.el`)
 
 ```elisp
-(defun embark-zoxide-add (candidate)
-  "Boost the score of the selected zoxide directory by `zoxide-add-amount'.
-Runs `zoxide add --score <amount>' to increment its frecency."
+(defun embark--zoxide-extract-path (&optional candidate)
+  "Extract the path from a vertico candidate string.
+Strips consult tofu characters and parses the score prefix."
+  (unless candidate
+    (setq candidate (vertico--candidate))
+    (when (and candidate (fboundp 'consult--tofu-strip))
+      (setq candidate (consult--tofu-strip candidate))))
+  (or (cdr (zoxide-parse-score-line candidate)) candidate))
+
+(defun embark--zoxide-refresh ()
+  "Re-query zoxide and swap `vertico--candidates' in place.
+No timer, no abort-recursive-edit — just replaces the candidate list
+and re-renders vertico."
+  (let* ((input (minibuffer-contents-no-properties))
+         (args (if (or (not input) (string-empty-p input))
+                   '("query" "-ls")
+                 (list "query" "-ls" input)))
+         (raw (apply #'zoxide-run nil args))
+         (lines (remove "" (split-string raw "\n" t)))
+         (new-candidates (delq nil (mapcar #'zoxide-consult-format lines))))
+    (when (and (boundp 'vertico--candidates) vertico--candidates)
+      (setq vertico--candidates new-candidates
+            vertico--total (length vertico--candidates))
+      (if (zerop vertico--total)
+          (setq vertico--index -1)
+        (when (>= vertico--index vertico--total)
+          (setq vertico--index (max 0 (1- vertico--total)))))
+      (vertico--prompt-selection)
+      (vertico--display-count)
+      (vertico--display-candidates (vertico--arrange-candidates)))))
+
+(defun embark-zoxide-add (&optional candidate)
+  "Boost the selected zoxide directory by `zoxide-add-amount'."
   (interactive)
-  (zoxide-run nil "add" "--score" (number-to-string zoxide-add-amount) candidate)
-  (embark--restart))
-```
+  (setq candidate (embark--zoxide-extract-path candidate))
+  (when candidate
+    (zoxide-run nil "add" "--score" (number-to-string zoxide-add-amount) candidate)
+    (embark--zoxide-refresh)
+    (message "zoxide: %s +%d" candidate zoxide-add-amount))
+  candidate)
 
-```elisp
-(defun embark-zoxide-subtract (candidate)
+(defun embark-zoxide-subtract (&optional candidate)
   "Demote the selected zoxide directory by `zoxide-subtract-amount'.
-Parses the current score, removes the entry, then re-adds it
-with a reduced score of `max(1, current - zoxide-subtract-amount)'."
+Reads the current score from the display string directly (NOT from
+`zoxide query -ls <path>' — zoxide does fuzzy matching and would
+return wrong results)."
   (interactive)
-  (let* ((raw (zoxide-run nil "query" "-ls" candidate))
-         (first-line (car (split-string raw "\n" t)))
-         (current-score (and first-line
-                             (car (zoxide-parse-score-line first-line))))
-         (new-score (max 1 (- (or current-score 1)
-                              zoxide-subtract-amount))))
-    (zoxide-run nil "remove" candidate)
-    (zoxide-run nil "add" "--score" (number-to-string new-score) candidate)
-    (message "Zoxide: %s score reduced from %s to %s"
-             candidate (or current-score "?") new-score))
-  (embark--restart))
+  (setq candidate (embark--zoxide-extract-path candidate))
+  ;; We already parsed the score above in extract-path — the car
+  ;; of zoxide-parse-score-line was the score. We lost it when
+  ;; we took the cdr. Re-extract from the raw vertico candidate.
+  (let* ((raw (vertico--candidate))
+         (stripped (if (fboundp 'consult--tofu-strip)
+                       (consult--tofu-strip raw) raw))
+         (parsed (zoxide-parse-score-line stripped))
+         (current-score (car parsed))
+         (new-score (max 1 (- (or current-score 1) zoxide-subtract-amount))))
+    (when candidate
+      (zoxide-run nil "remove" candidate)
+      (zoxide-run nil "add" "--score" (number-to-string new-score) candidate)
+      (embark--zoxide-refresh)
+      (message "zoxide: %s score reduced from %s to %s"
+               candidate (or current-score "?") new-score)))
+  candidate)
 ```
 
-**How subtract works step by step:**
+### 3. Direct keybindings via consult `:keymap` (in `zoxide.el`)
 
-1. Run `zoxide query -ls <candidate>` to get the current line
-2. Parse the score number from the output (e.g. `1528.0`)
-3. Run `zoxide remove <candidate>` to delete the entry
-4. Run `zoxide add --score <new-score> <candidate>` to re-add it at `max(1, current - zoxide-subtract-amount)`
-5. `embark--restart` refreshes the candidate list with the updated database
+```elisp
+(defvar-keymap zoxide-consult-map
+  :doc "Additional keybindings for the zoxide travel minibuffer."
+  "C-i" #'embark-zoxide-add
+  "C-d" #'embark-zoxide-subtract)
+```
 
-**Why `max(1, ...)`?** — Scores below 1 are pruned by zoxide's aging algorithm. Keeping it at minimum 1 ensures the entry survives until the next aging cycle.
+Passed as `:keymap zoxide-consult-map` to `consult--read` in both `grease-zoxide-travel` and `eat-zoxide-travel`. These take priority over `vertico-map` so `C-d` in zoxide subtracts, while `C-d` in `consult-buffer` still kills buffers.
 
-**Why no timestamp manipulation?** — `zoxide add` sets the timestamp to "now", so the re-added entry appears recent. This is acceptable — the recency boost offsets the score reduction slightly, preventing the directory from completely disappearing from rankings. If the user really doesn't want it, they can press `-` multiple times until the score drops far enough, or just remove it entirely via a future `embark-zoxide-forget` action.
-
-### 3. Bind them in embark's zoxide-path keymap
+### 4. Embark menu access (secondary path, in `embark.el`)
 
 ```elisp
 (defvar-keymap embark-zoxide-path-map
@@ -89,32 +127,40 @@ with a reduced score of `max(1, current - zoxide-subtract-amount)'."
   :parent embark-general-map
   "+" #'embark-zoxide-add
   "-" #'embark-zoxide-subtract)
-```
 
-### 4. Register the keymap for the `zoxide-path` category
-
-```elisp
 (add-to-list 'embark-keymap-alist '(zoxide-path . embark-zoxide-path-map))
 ```
 
-This tells embark: "When the minibuffer category is `zoxide-path`, use this keymap."
+Also accessible via `C-.` (embark-act) for discoverability.
 
-### 5. Where to put the code
+### 5. Category bridge
 
-Can live in `keybinds.el` near the zoxide dispatch function, or in a separate `zoxide-embark.el` file.
+The `:category 'zoxide-path` in `consult--read` is the bridge between consult and embark. Embark reads the category from completion metadata and looks up the keymap in `embark-keymap-alist`. No additional glue code needed.
 
 ---
 
-## Live refresh with `embark--restart`
+## In-place refresh (no timer, no restart)
 
-After running `zoxide add` or the subtract workaround, the async pipeline still holds the old candidate list. `embark--restart`:
+`embark--zoxide-refresh` uses the same pattern as `my/consult-kill-buffer`:
 
-1. Cancels the current consult session cleanly
-2. Re-runs `grease-zoxide-travel` / `eat-zoxide-travel`
-3. The async pipeline executes `zoxide query -ls <current-input>` again
-4. Returns updated results with the modified scores
+1. Reads current minibuffer input
+2. Shells out to `zoxide query -ls <input>` (sync, instantaneous)
+3. Parses output into formatted candidates
+4. Swaps `vertico--candidates` directly
+5. Re-renders with `vertico--prompt-selection` / `vertico--display-count` / `vertico--display-candidates`
 
-The minibuffer contents (the user's typed input) are preserved across the restart.
+No `abort-recursive-edit`, no `run-with-idle-timer`, no `embark--restart`. The minibuffer stays open the entire time.
+
+---
+
+## Indicator & vertico count
+
+- **Async indicator** (`*`/`:`/`!`): Replaced with `zoxide--async-indicator-right` (in `zoxide--async-wrap`) that places the indicator at `(point-max)` with `after-string` — appears on the right.
+- **Verico count** (`[1/2] `): Changed from default `"%-6s "` to brackets via `vertico.el`:
+
+```elisp
+(setq vertico-count-format '("%s " . "[%s/%s]"))
+```
 
 ---
 
@@ -122,18 +168,11 @@ The minibuffer contents (the user's typed input) are preserved across the restar
 
 | Scenario | Behavior |
 |----------|----------|
-| `+` on an already-ranked dir | Score increments, may move up in rankings |
-| `+` on a dir not in zoxide | Added with score 1, appears on refresh |
-| `-` on a dir not in zoxide | `zoxide query -ls` returns empty → `new-score` defaults to `max(1, 0-5)` = 1 → add with score 1 (creates entry) |
-| `-` on a dir with score ≤ `zoxide-subtract-amount` | `max(1, 5-5)` = 1 → reset to minimum |
-| Multiple `-` presses | Each press reduces further — score 1 is the floor |
-| `-` on a dir with score 1 | `max(1, 1-5)` = 1 → stays at 1 (no change) |
-| No embark installed | `zoxide-path` keymap is never loaded, no error |
-| `zoxide query -ls` parsing fails | `current-score` is nil → `new-score` defaults to 1 |
-
-## Future possibilities
-
-- **Custom increment amount**: Use `C-u 10 +` to boost by 10 instead of 1
-- **Forget action**: `zoxide remove` shortcut for complete removal
-- **Timestamp reset**: Modify the database timestamp to also affect recency ranking
-- **Annotate scores in real-time**: After each action, re-annotate candidates without a full restart
+| `C-i` on already-ranked dir | Score increments by `zoxide-add-amount`, may move up |
+| `C-i` on dir not in zoxide | `zoxide add` adds it with score 1 |
+| `C-d` on already-ranked dir | Score reduced by `zoxide-subtract-amount`, min 1 |
+| `C-d` on dir with score 1 | Stays at 1 (floor) |
+| Multiple `C-d` presses | Each reduces further until score 1 |
+| `C-d` in consult-buffer | Still kills buffers (vertico-map, not zoxide-consult-map) |
+| No embark installed | `zoxide-path` keymap won't be registered, functions load safely |
+| `zoxide query -ls` parsing fails | `current-score` defaults to nil → `new-score` = 1 |
