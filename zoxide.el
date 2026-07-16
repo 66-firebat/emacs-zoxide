@@ -269,8 +269,7 @@ Returns a command list or nil."
     (list "zoxide" "query" "-ls" input)))
 
 (defun zoxide--async-wrap (async)
-  "Wrap ASYNC function for zoxide without the split/`#' prefix.
-Skips `consult--async-split' which inserts a narrowing character."
+  "Wrap ASYNC function for zoxide without the split/`#' prefix."
   (consult--async-pipeline
    async
    (consult--async-indicator)
@@ -298,7 +297,7 @@ Opens the selected directory in Grease via `zoxide-travel-callback-function'."
                   :transform (consult--async-map #'zoxide-consult-format))
                 :async-wrap #'zoxide--async-wrap
                 :keymap zoxide-consult-map
-                :prompt "zoxide: "
+                :prompt "󰡦 : "
                 :category 'zoxide-path
                 :require-match t
                 :sort nil
@@ -327,7 +326,7 @@ The `cd' is sent to the most recently active eat buffer."
                     :transform (consult--async-map #'zoxide-consult-format))
                   :async-wrap #'zoxide--async-wrap
                   :keymap zoxide-consult-map
-                  :prompt "zoxide: "
+                  :prompt "󰡦 : "
                   :category 'zoxide-path
                   :require-match t
                   :sort nil
