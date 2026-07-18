@@ -367,6 +367,7 @@ invoking buffer is not an eat terminal."
   (interactive)
   (let ((query (read-string "query: ")))
     (zoxide-open-with query zoxide-travel-callback-function t)))
+
 (provide 'zoxide)
 
 ;;; zoxide.el ends here
