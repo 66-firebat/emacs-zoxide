@@ -314,8 +314,13 @@ Opens the selected directory in Grease via `zoxide-travel-callback-function'."
 ;;;###autoload
 (defun eat-zoxide-travel ()
   "Select a zoxide directory and cd to it in the current eat terminal.
-Uses consult for selection with frecency ranking.
-The `cd' is sent to the most recently active eat buffer."
+Uses consult for selection with frecency ranking, falling back to
+`completing-read' when consult is unavailable.
+
+Sends \"cd DIR && clear\" to the shell process of the eat terminal
+that was current when this command was invoked — not to whichever
+eat buffer was most recently active.  Signals `user-error' if the
+invoking buffer is not an eat terminal."
   (interactive)
   (let ((origin-buffer (current-buffer)))
     (if (and (fboundp 'consult--process-collection)
